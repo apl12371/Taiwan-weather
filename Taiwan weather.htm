@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台灣衛星氣象觀測站</title>
+    
+    <!-- 改用 Leaflet 引擎 (穩定性高，無跨域安全問題) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            font-family: "Microsoft JhengHei", "Segoe UI", sans-serif;
+            overflow: hidden;
+        }
+
+        /* 地圖容器 */
+        #map {
+            width: 100vw;
+            height: 100vh;
+            background: #000; /* 預設背景黑 */
+        }
+
+        /* 自訂 Leaflet Marker 樣式 */
+        .leaflet-div-icon {
+            background: transparent;
+            border: none;
+        }
+
+        /* 城市光點主體 */
+        .city-marker-dot {
+            width: 14px;
+            height: 14px;
+            background-color: #fff;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #4facfe;
+            position: relative;
+            /* 讓光點居中 */
+            margin: 0 auto; 
+        }
+
+        /* 光波擴散動畫 */
+        .city-marker-dot::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 100%;
+            height: 100%;
+            background-color: inherit;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            animation: pulse 2s infinite;
+            opacity: 0.5;
+            z-index: -1;
+        }
+
+        /* 新增：縣市名稱標籤樣式 */
+        .city-name-label {
+            position: absolute;
+            top: 18px; /* 位於光點下方 */
+            left: 50%;
+            transform: translateX(-50%); /* 水平居中 */
+            color: white;
+            font-size: 13px;
+            font-weight: bold;
+            /* 強力描邊效果，確保在衛星圖上看得到 */
+            text-shadow: 
+                -1px -1px 0 #000,  
+                 1px -1px 0 #000,
+                -1px  1px 0 #000,
+                 1px  1px 0 #000,
+                 0 0 5px rgba(0,0,0,0.8);
+            white-space: nowrap; /* 不換行 */
+            text-align: center;
+            cursor: pointer;
+        }
+
+        @keyframes pulse {
+            0% { width: 100%; height: 100%; opacity: 0.8; }
+            100% { width: 300%; height: 300%; opacity: 0; }
+        }
+
+        /* 特別城市的顏色 */
+        .bg-red { background-color: #ff4444; box-shadow: 0 0 12px #ff0000; }
+        .bg-green { background-color: #00ff00; box-shadow: 0 0 12px #00ff00; }
+        .bg-orange { background-color: #ffaa00; box-shadow: 0 0 12px #ffaa00; }
+
+        /* 天氣資訊卡片 */
+        #weather-card {
+            position: absolute;
+            top: 50%;
+            right: 30px;
+            transform: translateY(-50%) translateX(150%);
+            width: 300px;
+            padding: 25px;
+            background: rgba(20, 30, 40, 0.85);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            color: white;
+            transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+            z-index: 1000;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+        }
+
+        #weather-card.active {
+            transform: translateY(-50%) translateX(0);
+        }
+
+        .city-title { font-size: 2rem; margin: 0; font-weight: 700; color: #fff; }
+        .country-sub { color: #4facfe; font-size: 0.9rem; letter-spacing: 1px; margin-bottom: 20px; }
+        .weather-main { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .temp-display { font-size: 3rem; font-weight: 300; }
+        .weather-icon { font-size: 3rem; }
+        .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .detail-item span { display: block; font-size: 0.8rem; color: #aaa; }
+        .detail-item strong { font-size: 1.1rem; color: #eee; }
+        .close-btn { position: absolute; top: 15px; right: 15px; background: none; border: none; color: #aaa; cursor: pointer; font-size: 1.5rem; }
+        .close-btn:hover { color: white; }
+        .loader { text-align: center; color: #4facfe; display: none; padding: 20px; }
+        
+        /* 調整 Leaflet 預設控制項位置 */
+        .leaflet-top { top: 80px; } 
+    </style>
+</head>
+<body>
+
+    <!-- 地圖容器 -->
+    <div id="map"></div>
+
+    <!-- 天氣資訊面板 -->
+    <div id="weather-card">
+        <button class="close-btn" onclick="closeCard()">×</button>
+        <div id="card-content">
+            <h2 class="city-title" id="ui-city">City</h2>
+            <div class="country-sub" id="ui-country">Taiwan</div>
+            <div class="weather-main">
+                <div class="temp-display"><span id="ui-temp">--</span>°</div>
+                <div class="weather-icon" id="ui-icon">☁️</div>
+            </div>
+            <div class="details-grid">
+                <div class="detail-item"><span>天氣狀況</span><strong id="ui-desc">--</strong></div>
+                <div class="detail-item"><span>風速</span><strong id="ui-wind">--</strong></div>
+                <div class="detail-item"><span>緯度</span><strong id="ui-lat">--</strong></div>
+                <div class="detail-item"><span>地區</span><strong id="ui-area">--</strong></div>
+            </div>
+        </div>
+        <div class="loader" id="ui-loader">衛星連線中...</div>
+    </div>
+
+    <script>
+        // 1. 台灣縣市資料
+        const TAIWAN_CITIES = [
+            { name: "台北市", area: "北部", lat: 25.0330, lng: 121.5654, type: 'red' },
+            { name: "基隆市", area: "北部", lat: 25.1276, lng: 121.7392 },
+            { name: "新北市", area: "北部", lat: 25.0143, lng: 121.4672 },
+            { name: "桃園市", area: "北部", lat: 24.9936, lng: 121.3010 },
+            { name: "新竹市", area: "北部", lat: 24.8138, lng: 120.9675 },
+            { name: "苗栗縣", area: "中部", lat: 24.5602, lng: 120.8214 },
+            { name: "台中市", area: "中部", lat: 24.1477, lng: 120.6736, type: 'orange' },
+            { name: "彰化縣", area: "中部", lat: 24.0518, lng: 120.5161 },
+            { name: "南投縣", area: "中部", lat: 23.9610, lng: 120.9676 }, 
+            { name: "雲林縣", area: "中部", lat: 23.7092, lng: 120.4324 },
+            { name: "嘉義市", area: "南部", lat: 23.4801, lng: 120.4491 },
+            { name: "台南市", area: "南部", lat: 22.9997, lng: 120.2270 },
+            { name: "高雄市", area: "南部", lat: 22.6273, lng: 120.3014, type: 'green' },
+            { name: "屏東縣", area: "南部", lat: 22.5519, lng: 120.5487 },
+            { name: "宜蘭縣", area: "東部", lat: 24.7021, lng: 121.7377 },
+            { name: "花蓮縣", area: "東部", lat: 23.9871, lng: 121.6011 },
+            { name: "台東縣", area: "東部", lat: 22.7613, lng: 121.1435 },
+            { name: "澎湖縣", area: "離島", lat: 23.5697, lng: 119.5765 },
+            { name: "金門縣", area: "離島", lat: 24.4403, lng: 118.3232 },
+            { name: "連江縣", area: "離島", lat: 26.1573, lng: 119.9511 }
+        ];
+
+        // 2. 初始化 Leaflet 地圖
+        // 設定台灣中心點
+        const map = L.map('map', {
+            center: [23.6978, 120.9605],
+            zoom: 8,
+            zoomControl: false, // 暫時關閉，稍後手動加入以調整位置
+            attributionControl: false
+        });
+        
+        L.control.zoom({
+            position: 'topright'
+        }).addTo(map);
+
+        // 加入高解析度衛星圖層 (Esri World Imagery)
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+            maxZoom: 17
+        }).addTo(map);
+
+        // 3. 加入城市光點
+        TAIWAN_CITIES.forEach(city => {
+            // 決定顏色 class
+            let colorClass = '';
+            if(city.type === 'red') colorClass = 'bg-red';
+            else if(city.type === 'green') colorClass = 'bg-green';
+            else if(city.type === 'orange') colorClass = 'bg-orange';
+
+            // 建立自訂圖示：包含光點 (dot) 和 名稱 (label)
+            const icon = L.divIcon({
+                className: 'leaflet-div-icon',
+                html: `
+                    <div class="city-marker-dot ${colorClass}"></div>
+                    <div class="city-name-label">${city.name}</div>
+                `,
+                iconSize: [14, 14],
+                iconAnchor: [7, 7] // 讓圖示中心對準座標
+            });
+
+            // 加入 Marker
+            const marker = L.marker([city.lat, city.lng], { icon: icon }).addTo(map);
+
+            // 點擊事件
+            marker.on('click', () => {
+                // 平滑飛行動畫
+                map.flyTo([city.lat, city.lng], 11, {
+                    animate: true,
+                    duration: 1.5 // 秒數
+                });
+                updateWeatherUI(city);
+            });
+        });
+
+        // 4. 查詢天氣與更新介面 (與之前邏輯相同，無縫接軌)
+        async function updateWeatherUI(city) {
+            const card = document.getElementById('weather-card');
+            const content = document.getElementById('card-content');
+            const loader = document.getElementById('ui-loader');
+
+            card.classList.add('active');
+            content.style.display = 'none';
+            loader.style.display = 'block';
+
+            try {
+                // API 查詢
+                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lng}&current_weather=true`);
+                const data = await res.json();
+                const current = data.current_weather;
+
+                // 更新 UI 文字
+                document.getElementById('ui-city').innerText = city.name;
+                document.getElementById('ui-country').innerText = "TAIWAN";
+                document.getElementById('ui-area').innerText = city.area;
+                document.getElementById('ui-temp').innerText = current.temperature;
+                document.getElementById('ui-wind').innerText = current.windspeed + ' km/h';
+                document.getElementById('ui-lat').innerText = city.lat.toFixed(2);
+
+                // 天氣圖示判斷
+                const code = current.weathercode;
+                let icon = '☁️';
+                let desc = '多雲';
+                
+                if(code <= 1) { icon = '☀️'; desc = '晴朗'; }
+                else if(code <= 3) { icon = '⛅'; desc = '多雲'; }
+                else if(code <= 60) { icon = '🌧️'; desc = '有雨'; }
+                else if(code <= 80) { icon = '⛈️'; desc = '雷雨'; }
+                else if(code > 80) { icon = '⛈️'; desc = '暴雨'; }
+
+                // 修正 ID：使用 kebab-case 與 HTML 一致
+                document.getElementById('ui-icon').innerText = icon;
+                document.getElementById('ui-desc').innerText = desc;
+
+                loader.style.display = 'none';
+                content.style.display = 'block';
+
+            } catch (e) {
+                console.error(e);
+                // 修正 ID：使用 kebab-case 與 HTML 一致
+                const descEl = document.getElementById('ui-desc');
+                if (descEl) descEl.innerText = "連線失敗";
+                
+                loader.style.display = 'none';
+                content.style.display = 'block';
+            }
+        }
+
+        // 關閉卡片並重置視角
+        window.closeCard = function() {
+            document.getElementById('weather-card').classList.remove('active');
+            // 飛回台灣全景
+            map.flyTo([23.6978, 120.9605], 8, {
+                animate: true,
+                duration: 1.5
+            });
+        };
+    </script>
+</body>
+</html>
